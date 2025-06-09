@@ -1,8 +1,9 @@
 import { fetchToken } from '@/api/meteofrance/token/fetchToken.js';
+import { Env } from '@/env.js';
 import { readFile, writeFile } from 'node:fs/promises';
 
 export class TokenStorage {
-    static path: string = `${import.meta.dirname}/.token`;
+    static path: string = process.cwd() + '/.token';
     private static singleton: TokenStorage = new TokenStorage();
     private token: string;
     private currentUpdate: Promise<void> | null = null;
@@ -20,6 +21,12 @@ export class TokenStorage {
     }
 
     async getToken(): Promise<string> {
+        // Si le token dans .env est un JWT, l'utiliser directement
+        const envToken = Env.getSingleton().getMeteoFranceApplicationId();
+        if (envToken.startsWith('eyJ')) {
+            return envToken;
+        }
+        
         if (!this.token) {
             this.token = await this.loadFromFile();
         }
