@@ -1,6 +1,7 @@
 import { OptimizedHoraireRepository, DateRange, HoraireAggregates, StationFilter } from '@/produits-obs/station/horaire/db/OptimizedHoraireRepository.js';
 import { HoraireLineDTO } from '@/produits-obs/station/horaire/HoraireLineDTO.js';
 import type { PrismaClient } from '@prisma/client';
+import { Prisma } from '@prisma/client';
 
 export class OptimizedPrismaHoraireRepository implements OptimizedHoraireRepository {
     private prisma: PrismaClient;
@@ -123,88 +124,30 @@ export class OptimizedPrismaHoraireRepository implements OptimizedHoraireReposit
     async bulkUpsertOptimized(lines: HoraireLineDTO[]): Promise<void> {
         if (lines.length === 0) return;
 
-        // Utilise executeRaw pour une insertion bulk native PostgreSQL optimisée
-        const values = lines.map(line => {
-            const fields = [
-                `'${line.geo_id_insee}'`,
-                line.lat,
-                line.lon,
-                `'${line.reference_time.toISOString()}'`,
-                `'${line.insert_time.toISOString()}'`,
-                `'${line.validity_time.toISOString()}'`,
-                line.t ?? 'NULL',
-                line.td ?? 'NULL',
-                line.tx ?? 'NULL',
-                line.tn ?? 'NULL',
-                line.u ?? 'NULL',
-                line.ux ?? 'NULL',
-                line.un ?? 'NULL',
-                line.dd ?? 'NULL',
-                line.ff ?? 'NULL',
-                line.dxy ?? 'NULL',
-                line.fxy ?? 'NULL',
-                line.dxi ?? 'NULL',
-                line.fxi ?? 'NULL',
-                line.rr1 ?? 'NULL',
-                line.t_10 ?? 'NULL',
-                line.t_20 ?? 'NULL',
-                line.t_50 ?? 'NULL',
-                line.t_100 ?? 'NULL',
-                line.vv ?? 'NULL',
-                line.etat_sol ?? 'NULL',
-                line.sss ?? 'NULL',
-                line.n ?? 'NULL',
-                line.insolh ?? 'NULL',
-                line.ray_glo01 ?? 'NULL',
-                line.pres ?? 'NULL',
-                line.pmer ?? 'NULL',
-            ].join(',');
-            return `(${fields})`;
-        }).join(',');
+        // Pour de grosses insertions (>1000 lignes), utilise un batch sécurisé
+        const BATCH_SIZE = 1000;
+        
+        for (let i = 0; i < lines.length; i += BATCH_SIZE) {
+            const batch = lines.slice(i, i + BATCH_SIZE);
+            await this.processBatch(batch);
+        }
+    }
 
-        const sql = `
-            INSERT INTO "HoraireTempsReel" (
-                "geo_id_insee", "lat", "lon", "reference_time", "insert_time", "validity_time",
-                "t", "td", "tx", "tn", "u", "ux", "un", "dd", "ff", "dxy", "fxy", "dxi", "fxi",
-                "rr1", "t_10", "t_20", "t_50", "t_100", "vv", "etat_sol", "sss", "n", 
-                "insolh", "ray_glo01", "pres", "pmer"
-            )
-            VALUES ${values}
-            ON CONFLICT ("geo_id_insee", "validity_time") 
-            DO UPDATE SET
-                "lat" = EXCLUDED."lat",
-                "lon" = EXCLUDED."lon",
-                "reference_time" = EXCLUDED."reference_time",
-                "insert_time" = EXCLUDED."insert_time",
-                "t" = EXCLUDED."t",
-                "td" = EXCLUDED."td",
-                "tx" = EXCLUDED."tx",
-                "tn" = EXCLUDED."tn",
-                "u" = EXCLUDED."u",
-                "ux" = EXCLUDED."ux",
-                "un" = EXCLUDED."un",
-                "dd" = EXCLUDED."dd",
-                "ff" = EXCLUDED."ff",
-                "dxy" = EXCLUDED."dxy",
-                "fxy" = EXCLUDED."fxy",
-                "dxi" = EXCLUDED."dxi",
-                "fxi" = EXCLUDED."fxi",
-                "rr1" = EXCLUDED."rr1",
-                "t_10" = EXCLUDED."t_10",
-                "t_20" = EXCLUDED."t_20",
-                "t_50" = EXCLUDED."t_50",
-                "t_100" = EXCLUDED."t_100",
-                "vv" = EXCLUDED."vv",
-                "etat_sol" = EXCLUDED."etat_sol",
-                "sss" = EXCLUDED."sss",
-                "n" = EXCLUDED."n",
-                "insolh" = EXCLUDED."insolh",
-                "ray_glo01" = EXCLUDED."ray_glo01",
-                "pres" = EXCLUDED."pres",
-                "pmer" = EXCLUDED."pmer"
-        `;
-
-        await this.prisma.$executeRawUnsafe(sql);
+    private async processBatch(lines: HoraireLineDTO[]): Promise<void> {
+        // Utilise Prisma avec skipDuplicates pour éviter les conflits
+        // Plus sûr que le raw SQL et toujours performant
+        try {
+            await this.prisma.horaireTempsReel.createMany({
+                data: lines,
+                skipDuplicates: true,
+            });
+        } catch {
+            // Si createMany échoue, fall back sur des upserts individuels
+            // pour gérer les mises à jour existantes
+            for (const line of lines) {
+                await this.upsert(line);
+            }
+        }
     }
 
     async getHourlyAggregates(stationId: string, period: DateRange): Promise<HoraireAggregates[]> {
@@ -219,7 +162,7 @@ export class OptimizedPrismaHoraireRepository implements OptimizedHoraireReposit
             wind_speed_avg: number | null;
             precipitation_sum: number | null;
             measurements_count: bigint;
-        }>>`
+        }>>(Prisma.sql`
             SELECT 
                 geo_id_insee,
                 time_bucket('1 hour', validity_time) as period_start,
@@ -237,7 +180,7 @@ export class OptimizedPrismaHoraireRepository implements OptimizedHoraireReposit
                 AND validity_time <= ${period.end}
             GROUP BY geo_id_insee, time_bucket('1 hour', validity_time)
             ORDER BY period_start DESC
-        `;
+        `);
 
         return result.map(row => ({
             ...row,
@@ -257,7 +200,7 @@ export class OptimizedPrismaHoraireRepository implements OptimizedHoraireReposit
             wind_speed_avg: number | null;
             precipitation_sum: number | null;
             measurements_count: bigint;
-        }>>`
+        }>>(Prisma.sql`
             SELECT 
                 geo_id_insee,
                 time_bucket('1 day', validity_time) as period_start,
@@ -275,7 +218,7 @@ export class OptimizedPrismaHoraireRepository implements OptimizedHoraireReposit
                 AND validity_time <= ${period.end}
             GROUP BY geo_id_insee, time_bucket('1 day', validity_time)
             ORDER BY period_start DESC
-        `;
+        `);
 
         return result.map(row => ({
             ...row,
@@ -295,7 +238,7 @@ export class OptimizedPrismaHoraireRepository implements OptimizedHoraireReposit
             wind_speed_avg: number | null;
             precipitation_sum: number | null;
             measurements_count: bigint;
-        }>>`
+        }>>(Prisma.sql`
             SELECT 
                 geo_id_insee,
                 ${period.start} as period_start,
@@ -313,7 +256,7 @@ export class OptimizedPrismaHoraireRepository implements OptimizedHoraireReposit
                 AND validity_time <= ${period.end}
             GROUP BY geo_id_insee
             ORDER BY geo_id_insee
-        `;
+        `);
 
         return result.map(row => ({
             ...row,
@@ -332,7 +275,7 @@ export class OptimizedPrismaHoraireRepository implements OptimizedHoraireReposit
             max_temp_time: Date | null;
             min_temp: number | null;
             min_temp_time: Date | null;
-        }>>`
+        }>>(Prisma.sql`
             WITH temp_extremes AS (
                 SELECT 
                     t,
@@ -350,7 +293,7 @@ export class OptimizedPrismaHoraireRepository implements OptimizedHoraireReposit
                 (SELECT validity_time FROM temp_extremes WHERE max_rank = 1) as max_temp_time,
                 (SELECT t FROM temp_extremes WHERE min_rank = 1) as min_temp,
                 (SELECT validity_time FROM temp_extremes WHERE min_rank = 1) as min_temp_time
-        `;
+        `);
 
         return result[0] || {
             max_temp: null,
@@ -369,7 +312,7 @@ export class OptimizedPrismaHoraireRepository implements OptimizedHoraireReposit
             total_precipitation: number | null;
             max_hourly_precipitation: number | null;
             rainy_hours_count: bigint;
-        }>>`
+        }>>(Prisma.sql`
             SELECT 
                 SUM(rr1) as total_precipitation,
                 MAX(rr1) as max_hourly_precipitation,
@@ -379,7 +322,7 @@ export class OptimizedPrismaHoraireRepository implements OptimizedHoraireReposit
                 AND validity_time >= ${period.start}
                 AND validity_time <= ${period.end}
                 AND rr1 IS NOT NULL
-        `;
+        `);
 
         const data = result[0];
         return {

@@ -3,7 +3,7 @@ import { Env } from '@/env.js';
 import { readFile, writeFile } from 'node:fs/promises';
 
 export class TokenStorage {
-    static path: string = process.cwd() + '/.token';
+    static path: string = `${process.cwd()}/.token`;
     private static singleton: TokenStorage = new TokenStorage();
     private token: string;
     private currentUpdate: Promise<void> | null = null;
