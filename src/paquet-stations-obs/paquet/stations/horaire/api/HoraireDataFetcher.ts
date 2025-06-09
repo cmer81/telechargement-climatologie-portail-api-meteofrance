@@ -1,5 +1,5 @@
 import { TooManyRetriesError, UnexpectedResponseError } from '@/api/APIResponse.js';
-import { LoggerSingleton } from '@/lib/logger/LoggerSingleton.js';
+import { logValidationWarning } from '@/lib/logger/logValidationWarning.js';
 import { wait } from '@/lib/wait.js';
 import { HoraireDataAPIFetcher } from '@/paquet-stations-obs/paquet/stations/horaire/api/HoraireDataAPIFetcher.js';
 import { HoraireDate } from '@/produits-obs/station/horaire/HoraireDate.js';
@@ -33,10 +33,7 @@ export class HoraireDataFetcher {
         this.horaireLineSchema =
             horaireLineSchema ||
             buildHoraireLineSchema(ctx => {
-                LoggerSingleton.getSingleton().warn({
-                    message: 'Invalid value in incoming data replaced by default value',
-                    data: ctx.error,
-                });
+                logValidationWarning(ctx.error);
             });
     }
 
